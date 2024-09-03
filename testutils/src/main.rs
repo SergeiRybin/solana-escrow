@@ -1,18 +1,19 @@
-use glob::{glob};
-use solana_program::program_pack::Pack;
-use solana_sdk::signature::{read_keypair_file, EncodableKey, Keypair, Signer};
-use solana_sdk::{system_instruction};
-use std::io;
-use std::io::Error;
-use std::path::{Path, PathBuf};
+use glob::glob;
 use solana_program::hash::Hash;
+use solana_program::instruction::AccountMeta;
+use solana_program::program_pack::Pack;
 use solana_program::pubkey::Pubkey;
-use solana_program_test::{tokio, ProgramTest, BanksClient};
+use solana_program_test::{tokio, BanksClient, ProgramTest};
+use solana_sdk::signature::{read_keypair_file, EncodableKey, Keypair, Signer};
 use solana_sdk::transaction::Transaction;
+use solana_sdk::{system_instruction, system_program};
 use spl_token::{
     instruction,
     state::{Account, Mint},
 };
+use std::io;
+use std::io::Error;
+use std::path::{Path, PathBuf};
 
 fn generate_custom_keypair(startswith: &str) -> Keypair {
     let mut counter = 0;
@@ -52,7 +53,13 @@ fn read_or_generate_keypair(startswith: &str) -> Keypair {
     }
 }
 
-async fn create_mint_account(banks_client: &mut BanksClient, payer: &Keypair, mint_account: &Keypair, mint_authority: &Keypair, recent_blockhash: &Hash) {
+async fn create_mint_account(
+    banks_client: &mut BanksClient,
+    payer: &Keypair,
+    mint_account: &Keypair,
+    mint_authority: &Keypair,
+    recent_blockhash: &Hash,
+) {
     let rent = banks_client.get_rent().await.expect("Unable to read rent");
     let mint_rent = rent.minimum_balance(Mint::LEN);
 
@@ -70,7 +77,7 @@ async fn create_mint_account(banks_client: &mut BanksClient, payer: &Keypair, mi
         None,
         9,
     )
-        .expect("Unable to init mint account");
+    .expect("Unable to init mint account");
     let mint_tx = Transaction::new_signed_with_payer(
         &[create_mint_instruction, init_mint_instruction],
         Some(&payer.pubkey()),
@@ -83,7 +90,46 @@ async fn create_mint_account(banks_client: &mut BanksClient, payer: &Keypair, mi
     }
 }
 
-async fn create_ata(banks_client: &mut BanksClient, payer: &Keypair, user_account: &Keypair, user_owner_pk: &Pubkey, mint_account_pk: &Pubkey, recent_blockhash: &Hash) {
+async fn create_user_account(
+    banks_client: &mut BanksClient,
+    payer: &Keypair,
+    user_account: &Keypair,
+    recent_blockhash: &Hash,
+) {
+    let rent = banks_client.get_rent().await.expect("Unable to read rent");
+    let account_rent = rent.minimum_balance(Account::LEN);
+    let create_user_account_ix = system_instruction::create_account(
+        &payer.pubkey(),
+        &user_account.pubkey(),
+        account_rent,
+        Account::LEN as u64,
+        &spl_token::id(),
+    );
+
+    let create_user_account_tx = Transaction::new_signed_with_payer(
+        &[create_user_account_ix],
+        Some(&payer.pubkey()),
+        &[&payer, &user_account],
+        *recent_blockhash,
+    );
+    match banks_client
+        .process_transaction(create_user_account_tx)
+        .await
+    {
+        Err(e) => println!("Unable to send transaction: {}", e),
+        _ => (),
+    }
+}
+
+async fn create_ata(
+    banks_client: &mut BanksClient,
+    payer: &Keypair,
+    user_account: &Keypair,
+    user_owner_pk: &Pubkey,
+    mint_account_pk: &Pubkey,
+    recent_blockhash: &Hash,
+) {
+    //  TODO: remove Alice everywhere
     let rent = banks_client.get_rent().await.expect("Unable to read rent");
     let account_rent = rent.minimum_balance(Account::LEN);
     let create_alice_account_ix = system_instruction::create_account(
@@ -100,7 +146,7 @@ async fn create_ata(banks_client: &mut BanksClient, payer: &Keypair, user_accoun
         mint_account_pk,
         user_owner_pk,
     )
-        .expect("Unable to init Alice's account");
+    .expect("Unable to init Alice's account");
 
     let create_user_account_tx = Transaction::new_signed_with_payer(
         &[create_alice_account_ix, init_user_account_ix],
@@ -108,21 +154,33 @@ async fn create_ata(banks_client: &mut BanksClient, payer: &Keypair, user_accoun
         &[&payer, &user_account],
         *recent_blockhash,
     );
-    match banks_client.process_transaction(create_user_account_tx).await {
+    match banks_client
+        .process_transaction(create_user_account_tx)
+        .await
+    {
         Err(e) => println!("Unable to send transaction: {}", e),
         _ => (),
     }
 }
 
-async fn mint_to_user_account(banks_client: &mut BanksClient, payer: &Keypair, mint_account: &Pubkey, mint_authority: &Keypair, user_account: &Pubkey, recent_blockhash: &Hash, amount: u64) {
+async fn mint_to_user_account(
+    banks_client: &mut BanksClient,
+    payer: &Keypair,
+    mint_account: &Pubkey,
+    mint_authority: &Keypair,
+    user_account: &Pubkey,
+    recent_blockhash: &Hash,
+    amount: u64,
+) {
     let mint_to_alice_ix = instruction::mint_to(
         &spl_token::id(),
         mint_account,
         user_account,
         &mint_authority.pubkey(),
         &[],
-        amount
-    ).expect("Unable mint to Alice");
+        amount,
+    )
+    .expect("Unable mint to Alice");
     let mint_to_alice_tx = Transaction::new_signed_with_payer(
         &[mint_to_alice_ix],
         Some(&payer.pubkey()),
@@ -135,7 +193,6 @@ async fn mint_to_user_account(banks_client: &mut BanksClient, payer: &Keypair, m
     }
 }
 
-
 // Replace with devnet or whichever cluster you're currently on
 // let rpc = RpcClient::new(Cluster::Localnet.url());
 // let sig = rpc.request_airdrop(pubkey, lamports).unwrap();
@@ -144,7 +201,9 @@ async fn test_case() {
     let mint_authority_kp = read_or_generate_keypair("ma");
     let alice_mint_account_kp = read_or_generate_keypair("am");
     let bob_mint_account_kp = read_or_generate_keypair("bm");
-    let test_program = ProgramTest::default();
+    let mut test_program = ProgramTest::default();
+    let escrow_program_kp = Keypair::new();
+    test_program.add_program("escrow-program", escrow_program_kp.pubkey(), None);
     let (mut banks_client, payer, recent_blockhash) = test_program.start().await;
 
     let alice_owner_kp = read_or_generate_keypair("ao");
@@ -155,21 +214,211 @@ async fn test_case() {
     let alice_token_amount = 10u64;
     let bob_token_amount = 5u64;
 
-    create_mint_account(&mut banks_client, &payer, &alice_mint_account_kp, &mint_authority_kp, &recent_blockhash).await;
-    create_ata(&mut banks_client, &payer, &alice_account_kp, &alice_owner_kp.pubkey(), &alice_mint_account_kp.pubkey(), &recent_blockhash).await;
-    mint_to_user_account(&mut banks_client, &payer, &alice_mint_account_kp.pubkey(), &mint_authority_kp, &alice_account_kp.pubkey(),&recent_blockhash, alice_token_amount).await;
+    create_user_account(
+        &mut banks_client,
+        &payer,
+        &alice_owner_kp,
+        &recent_blockhash,
+    ).await;
 
-    create_mint_account(&mut banks_client, &payer, &bob_mint_account_kp, &mint_authority_kp, &recent_blockhash).await;
-    create_ata(&mut banks_client, &payer, &bob_account_kp, &bob_owner_kp.pubkey(), &bob_mint_account_kp.pubkey(), &recent_blockhash).await;
-    mint_to_user_account(&mut banks_client, &payer, &bob_mint_account_kp.pubkey(), &mint_authority_kp, &bob_account_kp.pubkey(),&recent_blockhash, bob_token_amount).await;
+    create_mint_account(
+        &mut banks_client,
+        &payer,
+        &alice_mint_account_kp,
+        &mint_authority_kp,
+        &recent_blockhash,
+    )
+    .await;
 
-    let alice_account = banks_client.get_account(alice_account_kp.pubkey()).await.unwrap().expect("Unable to read Alice's account");
-    let account_data = Account::unpack(&alice_account.data).unwrap();
+    create_ata(
+        &mut banks_client,
+        &payer,
+        &alice_account_kp,
+        &alice_owner_kp.pubkey(),
+        &alice_mint_account_kp.pubkey(),
+        &recent_blockhash,
+    )
+    .await;
+    mint_to_user_account(
+        &mut banks_client,
+        &payer,
+        &alice_mint_account_kp.pubkey(),
+        &mint_authority_kp,
+        &alice_account_kp.pubkey(),
+        &recent_blockhash,
+        alice_token_amount,
+    )
+    .await;
+
+    create_mint_account(
+        &mut banks_client,
+        &payer,
+        &bob_mint_account_kp,
+        &mint_authority_kp,
+        &recent_blockhash,
+    )
+    .await;
+    create_ata(
+        &mut banks_client,
+        &payer,
+        &bob_account_kp,
+        &bob_owner_kp.pubkey(),
+        &bob_mint_account_kp.pubkey(),
+        &recent_blockhash,
+    )
+    .await;
+    mint_to_user_account(
+        &mut banks_client,
+        &payer,
+        &bob_mint_account_kp.pubkey(),
+        &mint_authority_kp,
+        &bob_account_kp.pubkey(),
+        &recent_blockhash,
+        bob_token_amount,
+    )
+    .await;
+
+    let alice_token_account = banks_client
+        .get_account(alice_account_kp.pubkey())
+        .await
+        .unwrap()
+        .expect("Unable to read Alice's account");
+    let account_data = Account::unpack(&alice_token_account.data).unwrap();
     assert_eq!(account_data.amount, alice_token_amount);
 
-    let bob_account = banks_client.get_account(bob_account_kp.pubkey()).await.unwrap().expect("Unable to read Alice's account");
+    let bob_account = banks_client
+        .get_account(bob_account_kp.pubkey())
+        .await
+        .unwrap()
+        .expect("Unable to read Alice's account");
     let account_data = Account::unpack(&bob_account.data).unwrap();
     assert_eq!(account_data.amount, bob_token_amount);
+
+    let seed = b"escrow";
+    let (pda_account_pk, bump_seed) = Pubkey::find_program_address(
+        &[payer.pubkey().as_ref(), seed],
+        &escrow_program_kp.pubkey(),
+    );
+    println!("PDA: {}", pda_account_pk);
+
+    let escrow_init_ix = solana_sdk::instruction::Instruction {
+        program_id: escrow_program_kp.pubkey(),
+        accounts: vec![
+            AccountMeta::new(payer.pubkey(), true),
+            AccountMeta::new(pda_account_pk, false),
+            AccountMeta::new(system_program::id(), false),
+        ],
+        data: [[0].as_slice(), seed.as_slice(), [bump_seed].as_slice()].concat(),
+    };
+
+    let interact_with_escrow_tx = Transaction::new_signed_with_payer(
+        &[escrow_init_ix],
+        Some(&payer.pubkey()),
+        &[&payer],
+        recent_blockhash,
+    );
+
+    match banks_client
+        .process_transaction(interact_with_escrow_tx)
+        .await
+    {
+        Err(e) => println!("Unable to send a transaction: {}", e),
+        _ => (),
+    }
+
+    let pda_account = banks_client
+        .get_account(pda_account_pk)
+        .await
+        .unwrap()
+        .expect("Unable to read PDA account");
+    let account_data = Account::unpack(&bob_account.data).unwrap();
+    assert_eq!(pda_account.owner, escrow_program_kp.pubkey());
+
+    /// Deposit block
+    let deposit_ix = solana_sdk::instruction::Instruction {
+        program_id: escrow_program_kp.pubkey(),
+        accounts: vec![
+            AccountMeta::new(payer.pubkey(), true),
+            AccountMeta::new(pda_account_pk, false),
+            AccountMeta::new_readonly(alice_owner_kp.pubkey(), true),
+            AccountMeta::new(alice_account_kp.pubkey(), true),
+            AccountMeta::new_readonly(spl_token::id(), false),
+            AccountMeta::new_readonly(bob_mint_account_kp.pubkey(), false),
+        ],
+        data: vec![1],
+    };
+
+    let deposit_tx = Transaction::new_signed_with_payer(
+        &[deposit_ix],
+        Some(&payer.pubkey()),
+        &[&payer, &alice_owner_kp, &alice_account_kp],
+        recent_blockhash,
+    );
+
+    match banks_client
+        .process_transaction(deposit_tx)
+        .await
+    {
+        Err(e) => println!("Unable to make a deposit: {}", e),
+        _ => (),
+    }
+
+    let deposit_account = banks_client
+        .get_account(alice_account_kp.pubkey())
+        .await
+        .unwrap()
+        .expect("Unable to read deposit account");
+    let deposit_data = Account::unpack(&deposit_account.data).unwrap();
+    assert_eq!(deposit_data.owner, pda_account_pk);
+
+    /// Execute block
+    let execute_ix = solana_sdk::instruction::Instruction {
+        program_id: escrow_program_kp.pubkey(),
+        accounts: vec![
+            AccountMeta::new(payer.pubkey(), true),
+            AccountMeta::new(pda_account_pk, false),
+            AccountMeta::new_readonly(bob_owner_kp.pubkey(), true),
+            AccountMeta::new(bob_account_kp.pubkey(), true),
+            AccountMeta::new_readonly(spl_token::id(), false),
+            AccountMeta::new_readonly(alice_mint_account_kp.pubkey(), false),
+            AccountMeta::new(alice_account_kp.pubkey(), false),
+        ],
+        data: vec![2],
+    };
+
+    let execute_tx = Transaction::new_signed_with_payer(
+        &[execute_ix],
+        Some(&payer.pubkey()),
+        &[&payer, &bob_owner_kp, &bob_account_kp],
+        recent_blockhash,
+    );
+
+    match banks_client
+        .process_transaction(execute_tx)
+        .await
+    {
+        Err(e) => println!("Unable to make an execution: {}", e),
+        _ => (),
+    }
+    // let blockhash = banks_client.get_latest_blockhash().await.unwrap();
+    //
+    // let escrow_init_ix = solana_sdk::instruction::Instruction {
+    //     program_id: escrow_program_kp.pubkey(),
+    //     accounts: vec![AccountMeta::new(payer.pubkey(), true), AccountMeta::new(pda_account_pk, false), AccountMeta::new(system_program::id(), false)],
+    //     data: vec![seed]
+    // };
+    // let interact_with_escrow_tx = Transaction::new_signed_with_payer(
+    //     &[escrow_init_ix],
+    //     Some(&payer.pubkey()),
+    //     &[&payer],
+    //     blockhash,
+    // );
+    //
+    // match banks_client.process_transaction(interact_with_escrow_tx).await {
+    //     Err(e) => println!("Unable to send a transaction: {}", e),
+    //     _ => (),
+    // }
+    // println!("Balance: {}", banks_client.get_balance(pda_account_pk).await.unwrap());
     // Check if an authority kp exists
     // If not, create a new one
     // Make an airdrop
