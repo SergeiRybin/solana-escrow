@@ -19,6 +19,15 @@ pub struct Escrow {
     pub owner_account: Pubkey,
 }
 
+impl Escrow {
+    pub fn reset(&mut self) {
+        self.active = false;
+        self.amount_expected = 0;
+        self.token_expected = Pubkey::default();
+        self.holding_account = Pubkey::default();
+        self.owner_account = Pubkey::default();
+    }
+}
 impl Sealed for Escrow {}
 impl Pack for Escrow {
     const LEN: usize = DATA_LEN;

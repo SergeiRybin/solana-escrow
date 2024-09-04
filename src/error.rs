@@ -1,3 +1,4 @@
+use solana_program::msg;
 use solana_program::program_error::ProgramError;
 use thiserror::Error;
 
@@ -12,6 +13,23 @@ pub enum EscrowError {
 
     #[error("Escrow program is not initialized")]
     NotInitialized,
+
+    #[error("Executor expects another amount of token deposited")]
+    DepositTokenAmtMismatch,
+
+    #[error("Executor expects another token mint from deposit")]
+    DepositTokenMintMismatch,
+
+    #[error("Depositor expected another amount of token passed by the executor")]
+    ExecutorTokenAmtMismatch,
+
+    #[error("Depositor expected another token mint passed by the executor")]
+    ExecutorTokenMintMismatch,
+}
+
+pub fn throw_and_log(error: EscrowError) -> ProgramError {
+    msg!("{}", error);
+    error.into()
 }
 
 impl From<EscrowError> for ProgramError {

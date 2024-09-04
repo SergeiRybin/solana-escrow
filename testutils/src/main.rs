@@ -15,6 +15,18 @@ use std::io;
 use std::io::Error;
 use std::path::{Path, PathBuf};
 
+async fn check_account_property<F>(client: &mut BanksClient, account: &Pubkey, f: F)
+where F: Fn(Account)
+{
+    let fetched_account = client
+        .get_account(*account)
+        .await
+        .unwrap()
+        .expect("Unable to read account");
+    let account_data = Account::unpack(&fetched_account.data).unwrap();
+    f(account_data);
+}
+
 fn generate_custom_keypair(startswith: &str) -> Keypair {
     let mut counter = 0;
     let mut keypair = Keypair::new();
@@ -400,6 +412,11 @@ async fn test_case() {
         Err(e) => println!("Unable to make an execution: {}", e),
         _ => (),
     }
+
+    check_account_property(&mut banks_client, &alice_account_kp.pubkey(), |account| assert_eq!(account.owner, bob_owner_kp.pubkey())).await;
+    check_account_property(&mut banks_client, &bob_account_kp.pubkey(), |account| assert_eq!(account.owner, alice_owner_kp.pubkey())).await;
+
+
     // let blockhash = banks_client.get_latest_blockhash().await.unwrap();
     //
     // let escrow_init_ix = solana_sdk::instruction::Instruction {
