@@ -5,13 +5,14 @@ use solana_program::entrypoint::ProgramResult;
 use solana_program::program::{invoke, invoke_signed};
 use solana_program::program_pack::Pack;
 use solana_program::pubkey::{Pubkey};
-use solana_program::sysvar::{rent::Rent, Sysvar};
+use solana_program::sysvar::{rent::Rent};
 use solana_program::{msg, system_instruction, system_program};
-use solana_program::instruction::AccountMeta;
 use solana_program::program_error::ProgramError;
 use spl_token::instruction::set_authority;
+use crate::instruction_parser::parse_data;
+use crate::utils::{verify_pda, verify_rent_exemption};
 
-enum EscrowInstruction<'a> {
+pub enum EscrowInstruction<'a> {
     Init {
         seed: &'a [u8],
         bump_seed: u8
@@ -22,32 +23,10 @@ enum EscrowInstruction<'a> {
     Execute {
         amount_expected: u32,
     },
-    Cancel,
+    Reclaim,
 }
 
-fn parse_data(instruction_data: &[u8]) -> Result<EscrowInstruction, ProgramError> {
-    let data_len = instruction_data.len();
-    assert!(data_len > 0);
-    let instruction = instruction_data[0];
-    match instruction {
-        0 => Ok(EscrowInstruction::Init {
-            seed: &instruction_data[1..data_len - 1],
-            bump_seed: instruction_data[data_len - 1]
-        }),
-        1 => {
-            // Todo: make transmute
-            Ok(EscrowInstruction::Deposit {
-                amount_expected: 5
-            })
-        }
-        2 => {
-            Ok(EscrowInstruction::Execute {
-                amount_expected: 10
-            })
-        }
-        _ => Err(ProgramError::InvalidInstructionData)
-    }
-}
+
 fn init_escrow(
     accounts: &[AccountInfo],
     program_id: &Pubkey,
@@ -66,6 +45,8 @@ fn init_escrow(
     assert!(pda_account_info.is_writable);
     assert!(system_program::check_id(system_account.key));
 
+    verify_pda(pda_account_info, program_id)?;
+
     match pda_account_info.data_is_empty() {
         true => {
             let space = DATA_LEN;
@@ -79,13 +60,13 @@ fn init_escrow(
                     program_id
                 ),
                 &[payer_account_info.clone(), pda_account_info.clone(), system_account.clone()],
-                &[&[payer_account_info.key.as_ref(), seed, &[bump_seed]]],
+                &[&[seed, &[bump_seed]]],
             )?;
         }
         _ =>
             {
                 msg!("PDA account already exists");
-                return Err(EscrowError::PdaExists.into())
+                return Err(throw_and_log(EscrowError::PdaExists));
             }
     }
     // Transfer tokens
@@ -105,6 +86,21 @@ fn deposit(accounts: &[AccountInfo], program_id: &Pubkey, amount_expected: u32) 
     assert!(owner_account_info.is_signer);
     assert_eq!(*token_account_info.owner, spl_token::id());
     assert!(token_account_info.is_writable);
+    verify_rent_exemption(token_account_info)?;
+
+    if pda_account_info.owner != program_id {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+
+    let token_account_data = spl_token::state::Account::unpack(&token_account_info.data.borrow())?;
+
+    // Check if the owner matches the expected owner
+    if token_account_data.owner != *owner_account_info.key {
+        msg!("The provided owner is not the real owner of this token account.");
+        return Err(ProgramError::IllegalOwner);
+    }
+
+    verify_pda(pda_account_info, program_id)?;
 
     let mut escrow_account = Escrow{
         active: true,
@@ -114,21 +110,7 @@ fn deposit(accounts: &[AccountInfo], program_id: &Pubkey, amount_expected: u32) 
         owner_account: owner_account_info.key.clone(),
     };
 
-    if pda_account_info.owner != program_id {
-        return Err(ProgramError::IncorrectProgramId);
-    }
-
     escrow_account.pack_into_slice(&mut pda_account_info.try_borrow_mut_data()?);
-
-    // TODO: Make assertions in one style
-    // TODO: Add additional checks as rent exemption for deposit account
-    let token_account_data = spl_token::state::Account::unpack(&token_account_info.data.borrow())?;
-
-    // Check if the owner matches the expected owner
-    if token_account_data.owner != *owner_account_info.key {
-        msg!("The provided wallet is not the owner of this token account.");
-        return Err(ProgramError::IllegalOwner);
-    }
 
     let owner_change_ix = set_authority(
         token_program.key,
@@ -149,6 +131,7 @@ fn deposit(accounts: &[AccountInfo], program_id: &Pubkey, amount_expected: u32) 
         ],
     )?;
 
+    msg!("Account deposited successfully! You can retrieve it using Revoke instruction.");
     Ok(())
 }
 
@@ -164,17 +147,14 @@ fn execute(accounts: &[AccountInfo], program_id: &Pubkey, amount_expected: u32) 
 
     assert!(deposit_account_info.is_writable);
     assert!(token_account_info.is_writable);
+    verify_rent_exemption(token_account_info)?;
 
-    let mut escrow = Escrow::unpack_from_slice(*pda_account_info.try_borrow_data()?)?;
+    let mut escrow_account = Escrow::unpack_from_slice(*pda_account_info.try_borrow_data()?)?;
     let token_account_data = spl_token::state::Account::unpack(&token_account_info.data.borrow())?;
+
     //TODO: remove payer from PDA calculation
-    let (pda, bump_seed) = Pubkey::find_program_address(&[payer_account_info.key.as_ref(), SEED], program_id);
-
-    if pda != *pda_account_info.key {
-        msg!("Incorrect PDA account provided to the instruction");
-        return Err(ProgramError::InvalidAccountData);
-    }
-
+    //TODO: remove long paths in function calls
+    let (pda, bump_seed) = verify_pda(pda_account_info, program_id)?;
     let deposit_account_data = spl_token::state::Account::unpack(&deposit_account_info.data.borrow())?;
 
     if deposit_account_data.owner != pda {
@@ -182,14 +162,14 @@ fn execute(accounts: &[AccountInfo], program_id: &Pubkey, amount_expected: u32) 
         return Err(ProgramError::IllegalOwner);
     }
 
-    if !escrow.active {
+    if !escrow_account.active {
         return Err(throw_and_log(EscrowError::NotInitialized));
     }
 
     // Actors' expectations checks
-    if escrow.amount_expected != token_account_data.amount as u32 {
+    if escrow_account.amount_expected != token_account_data.amount as u32 {
         msg!("Error: Depositor and executor expectations are not met");
-        msg!("Depositor expected: {} tokens", escrow.amount_expected);
+        msg!("Depositor expected: {} tokens", escrow_account.amount_expected);
         msg!("Executor provided: {} tokens", token_account_data.amount as u32);
         return Err(throw_and_log(EscrowError::ExecutorTokenAmtMismatch));
     }
@@ -201,9 +181,9 @@ fn execute(accounts: &[AccountInfo], program_id: &Pubkey, amount_expected: u32) 
         return Err(throw_and_log(EscrowError::DepositTokenAmtMismatch));
     }
 
-    if escrow.token_expected != token_account_data.mint {
+    if escrow_account.token_expected != token_account_data.mint {
         msg!("Error: Depositor and executor expectations are not met");
-        msg!("Depositor expected: {} mint", escrow.token_expected);
+        msg!("Depositor expected: {} mint", escrow_account.token_expected);
         msg!("Executor provided: {} mint", token_account_data.mint);
         return Err(throw_and_log(EscrowError::ExecutorTokenMintMismatch));
     }
@@ -219,7 +199,7 @@ fn execute(accounts: &[AccountInfo], program_id: &Pubkey, amount_expected: u32) 
     let owner_change_ix = set_authority(
         token_program.key,
         token_account_info.key,
-        Some(&escrow.owner_account),
+        Some(&escrow_account.owner_account),
         spl_token::instruction::AuthorityType::AccountOwner,
         owner_account_info.key,
         &[&owner_account_info.key],
@@ -253,20 +233,79 @@ fn execute(accounts: &[AccountInfo], program_id: &Pubkey, amount_expected: u32) 
             pda_account_info.clone(),
             token_program.clone(),
         ],
-        &[&[payer_account_info.key.as_ref(), SEED, &[bump_seed]]],
+        &[&[SEED, &[bump_seed]]],
     )?;
 
     msg!("Swap passed successfully!");
     msg!("Depositor gets an account: {} with {} tokens of {} mint", token_account_info.key, token_account_data.amount, token_account_data.mint);
     msg!("Executor gets an account: {} with {} tokens of {} mint", deposit_account_info.key, deposit_account_data.amount, deposit_account_data.mint);
 
-    escrow.reset();
-    escrow.pack_into_slice(&mut pda_account_info.try_borrow_mut_data()?);
+    escrow_account.reset();
+    escrow_account.pack_into_slice(&mut pda_account_info.try_borrow_mut_data()?);
 
     Ok(())
 }
 
-pub fn process(
+fn reclaim(accounts: &[AccountInfo], program_id: &Pubkey) -> ProgramResult {
+    let account_info_iter = &mut accounts.iter();
+    let payer_account_info = next_account_info(account_info_iter)?;
+    let pda_account_info = next_account_info(account_info_iter)?;
+    let owner_account_info = next_account_info(account_info_iter)?;
+    let token_account_info = next_account_info(account_info_iter)?;
+    let token_program = next_account_info(account_info_iter)?;
+    
+    assert!(token_account_info.is_writable);
+    let (_pda, bump_seed) = verify_pda(pda_account_info, program_id)?;
+    
+    let token_account_data = spl_token::state::Account::unpack(&token_account_info.data.borrow())?;
+
+    // Check if the owner matches the expected owner
+    if token_account_data.owner != *pda_account_info.key {
+        msg!("The provided owner is not the real owner of this token account.");
+        return Err(ProgramError::IllegalOwner);
+    }
+
+    let mut escrow_account = Escrow::unpack_from_slice(*pda_account_info.try_borrow_data()?)?;
+
+    if !escrow_account.active {
+        return Err(throw_and_log(EscrowError::NotInitialized));
+    }
+
+    // Actors' expectations checks
+    if escrow_account.owner_account != *owner_account_info.key {
+        msg!("Attempt to reclaim non-owned account");
+        msg!("Claimed owner: {}", owner_account_info.key);
+        msg!("Real owner: {}", escrow_account.owner_account);
+        return Err(ProgramError::IllegalOwner);
+    }
+
+    let reclaim_ix = set_authority(
+        token_program.key,
+        token_account_info.key,
+        Some(&owner_account_info.key),
+        spl_token::instruction::AuthorityType::AccountOwner,
+        pda_account_info.key,
+        &[],
+    )?;
+
+    msg!("Calling the token program to transfer depositor token account ownership...");
+    invoke_signed(
+        &reclaim_ix,
+        &[
+            token_account_info.clone(),
+            pda_account_info.clone(),
+            token_program.clone(),
+        ],
+        &[&[SEED, &[bump_seed]]],
+    )?;
+
+    msg!("Account deposited successfully! You can retrieve it using Revoke instruction.");
+
+    escrow_account.pack_into_slice(&mut pda_account_info.try_borrow_mut_data()?);
+    Ok(())
+}
+
+pub fn parse_execute_instruction(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     instruction_data: &[u8],
@@ -294,9 +333,9 @@ pub fn process(
             msg!("Execute escrow request...");
             return execute(accounts, program_id, amount_expected);
         }
-        EscrowInstruction::Cancel => {
+        EscrowInstruction::Reclaim => {
             msg!("Escrow account is closed, tokens returned to");
-            // TODO: print return account
+            return reclaim(accounts, program_id);
         }
     }
 

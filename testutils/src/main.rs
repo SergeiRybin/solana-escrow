@@ -14,6 +14,7 @@ use spl_token::{
 use std::io;
 use std::io::Error;
 use std::path::{Path, PathBuf};
+use solana_sdk::reward_type::RewardType::Rent;
 
 async fn check_account_property<F>(client: &mut BanksClient, account: &Pubkey, f: F)
 where F: Fn(Account)
@@ -223,8 +224,8 @@ async fn test_case() {
     let alice_account_kp = read_or_generate_keypair("aa");
     let bob_account_kp = read_or_generate_keypair("ba");
 
-    let alice_token_amount = 10u64;
-    let bob_token_amount = 5u64;
+    let alice_token_amount: u32 = 10u32;
+    let bob_token_amount: u32 = 5u32;
 
     create_user_account(
         &mut banks_client,
@@ -258,7 +259,7 @@ async fn test_case() {
         &mint_authority_kp,
         &alice_account_kp.pubkey(),
         &recent_blockhash,
-        alice_token_amount,
+        alice_token_amount.into(),
     )
     .await;
 
@@ -286,7 +287,7 @@ async fn test_case() {
         &mint_authority_kp,
         &bob_account_kp.pubkey(),
         &recent_blockhash,
-        bob_token_amount,
+        bob_token_amount.into(),
     )
     .await;
 
@@ -296,7 +297,7 @@ async fn test_case() {
         .unwrap()
         .expect("Unable to read Alice's account");
     let account_data = Account::unpack(&alice_token_account.data).unwrap();
-    assert_eq!(account_data.amount, alice_token_amount);
+    assert_eq!(account_data.amount, alice_token_amount as u64);
 
     let bob_account = banks_client
         .get_account(bob_account_kp.pubkey())
@@ -304,11 +305,11 @@ async fn test_case() {
         .unwrap()
         .expect("Unable to read Alice's account");
     let account_data = Account::unpack(&bob_account.data).unwrap();
-    assert_eq!(account_data.amount, bob_token_amount);
+    assert_eq!(account_data.amount, bob_token_amount as u64);
 
     let seed = b"escrow";
     let (pda_account_pk, bump_seed) = Pubkey::find_program_address(
-        &[payer.pubkey().as_ref(), seed],
+        &[seed],
         &escrow_program_kp.pubkey(),
     );
     println!("PDA: {}", pda_account_pk);
@@ -347,6 +348,7 @@ async fn test_case() {
     assert_eq!(pda_account.owner, escrow_program_kp.pubkey());
 
     /// Deposit block
+    let alice_desired_amount = unsafe {std::mem::transmute::<u32, [u8; 4]>(bob_token_amount)};
     let deposit_ix = solana_sdk::instruction::Instruction {
         program_id: escrow_program_kp.pubkey(),
         accounts: vec![
@@ -357,7 +359,7 @@ async fn test_case() {
             AccountMeta::new_readonly(spl_token::id(), false),
             AccountMeta::new_readonly(bob_mint_account_kp.pubkey(), false),
         ],
-        data: vec![1],
+        data: [[1].as_slice(), alice_desired_amount.as_slice()].concat(),
     };
 
     let deposit_tx = Transaction::new_signed_with_payer(
@@ -384,6 +386,7 @@ async fn test_case() {
     assert_eq!(deposit_data.owner, pda_account_pk);
 
     /// Execute block
+    let bob_desired_amount = unsafe {std::mem::transmute::<u32, [u8; 4]>(alice_token_amount)};
     let execute_ix = solana_sdk::instruction::Instruction {
         program_id: escrow_program_kp.pubkey(),
         accounts: vec![
@@ -395,7 +398,7 @@ async fn test_case() {
             AccountMeta::new_readonly(alice_mint_account_kp.pubkey(), false),
             AccountMeta::new(alice_account_kp.pubkey(), false),
         ],
-        data: vec![2],
+        data: [[2].as_slice(), bob_desired_amount.as_slice()].concat(),
     };
 
     let execute_tx = Transaction::new_signed_with_payer(
