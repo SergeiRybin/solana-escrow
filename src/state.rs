@@ -2,7 +2,6 @@ use arrayref::{array_mut_ref, array_ref, array_refs, mut_array_refs};
 use solana_program::program_error::ProgramError;
 use solana_program::program_pack::{Pack, Sealed};
 use solana_program::pubkey::Pubkey;
-use std::mem;
 
 pub const SEED: &[u8; 6] = b"escrow";
 pub const DATA_LEN: usize = 101; //mem::size_of::<Escrow>();
@@ -34,8 +33,13 @@ impl Pack for Escrow {
 
     fn pack_into_slice(&self, dst: &mut [u8]) {
         let dst = array_mut_ref![dst, 0, Escrow::LEN];
-        let (active_dst, amount_expected_dst, token_expected_dst, holding_account_dst, owner_account_dst) =
-            mut_array_refs![dst, 1, 4, 32, 32, 32];
+        let (
+            active_dst,
+            amount_expected_dst,
+            token_expected_dst,
+            holding_account_dst,
+            owner_account_dst,
+        ) = mut_array_refs![dst, 1, 4, 32, 32, 32];
 
         active_dst[0] = self.active as u8;
         *amount_expected_dst = self.amount_expected.to_le_bytes();
@@ -46,8 +50,13 @@ impl Pack for Escrow {
 
     fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
         let src = array_ref![src, 0, Escrow::LEN];
-        let (active_src, amount_expected_src, token_expected_src, holding_account_src, owner_account_src) =
-            array_refs![src, 1, 4, 32, 32, 32];
+        let (
+            active_src,
+            amount_expected_src,
+            token_expected_src,
+            holding_account_src,
+            owner_account_src,
+        ) = array_refs![src, 1, 4, 32, 32, 32];
         Ok(Self {
             active: active_src[0] != 0,
             amount_expected: u32::from_le_bytes(*amount_expected_src),

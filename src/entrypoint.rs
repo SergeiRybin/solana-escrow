@@ -1,8 +1,8 @@
+use crate::processor::parse_execute_instruction;
 use solana_program::account_info::AccountInfo;
-use solana_program::{entrypoint, msg};
+use solana_program::entrypoint;
 use solana_program::entrypoint::ProgramResult;
 use solana_program::pubkey::Pubkey;
-use crate::processor::parse_execute_instruction;
 
 entrypoint!(process_instruction);
 
@@ -11,9 +11,5 @@ fn process_instruction(
     accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    parse_execute_instruction(
-        program_id,
-        accounts,
-        instruction_data
-    )
+    parse_execute_instruction(program_id, accounts, instruction_data)
 }

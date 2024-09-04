@@ -1,6 +1,6 @@
 mod entrypoint;
 mod error;
+mod instruction_parser;
 mod processor;
 mod state;
 mod utils;
-mod instruction_parser;

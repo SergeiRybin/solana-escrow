@@ -352,7 +352,6 @@ async fn test_case() {
     let deposit_ix = solana_sdk::instruction::Instruction {
         program_id: escrow_program_kp.pubkey(),
         accounts: vec![
-            AccountMeta::new(payer.pubkey(), true),
             AccountMeta::new(pda_account_pk, false),
             AccountMeta::new_readonly(alice_owner_kp.pubkey(), true),
             AccountMeta::new(alice_account_kp.pubkey(), true),
@@ -390,7 +389,6 @@ async fn test_case() {
     let execute_ix = solana_sdk::instruction::Instruction {
         program_id: escrow_program_kp.pubkey(),
         accounts: vec![
-            AccountMeta::new(payer.pubkey(), true),
             AccountMeta::new(pda_account_pk, false),
             AccountMeta::new_readonly(bob_owner_kp.pubkey(), true),
             AccountMeta::new(bob_account_kp.pubkey(), true),
