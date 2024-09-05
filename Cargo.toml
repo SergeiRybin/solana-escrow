@@ -14,6 +14,4 @@ crate-type = ["cdylib", "lib"]
 
 [dev-dependencies]
 solana-sdk = { version = "2.0.7" }
-solana-program = { version = "2.0.7" }
 solana-program-test = "2.0.7"
-spl-token = { version = "6.0.0",  features = ["no-entrypoint"] }
