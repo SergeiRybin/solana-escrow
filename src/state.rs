@@ -4,12 +4,11 @@ use solana_program::program_pack::{Pack, Sealed};
 use solana_program::pubkey::Pubkey;
 
 pub const SEED: &[u8; 6] = b"escrow";
-pub const DATA_LEN: usize = 101; //mem::size_of::<Escrow>();
+const DATA_LEN: usize = 101;
 
-// TODO: make multiple accounts
-// pub struct EscrowCollection([Escrow; 10]);
+const COLLECTION_WIDTH: usize = 5;
 
-#[derive(Default)]
+#[derive(Default, Copy, Clone)]
 pub struct Escrow {
     pub active: bool,
     pub amount_expected: u32,
@@ -18,6 +17,44 @@ pub struct Escrow {
     pub owner_account: Pubkey,
 }
 
+pub struct EscrowCollection {
+    pub items: [Escrow; COLLECTION_WIDTH],
+}
+
+impl EscrowCollection {
+    pub fn find_by_token_account(&mut self, token_account: &Pubkey) -> Option<&mut Escrow> {
+        self.items
+            .as_mut()
+            .iter_mut()
+            .find(|item| item.active && item.holding_account == *token_account)
+    }
+
+    pub fn find_next_available(&mut self) -> Option<&mut Escrow> {
+        self.items.iter_mut().find(|item| !item.active)
+    }
+}
+impl Sealed for crate::state::EscrowCollection {}
+impl Pack for crate::state::EscrowCollection {
+    const LEN: usize = DATA_LEN * COLLECTION_WIDTH;
+    fn pack_into_slice(&self, dst: &mut [u8]) {
+        for (i, item) in self.items.iter().enumerate() {
+            let subdst = &mut dst[i * DATA_LEN..(i + 1) * DATA_LEN];
+            item.pack_into_slice(subdst)
+        }
+    }
+    fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
+        let mut obj = Self {
+            items: [Escrow::default(); COLLECTION_WIDTH],
+        };
+        for (i, item) in obj.items.iter_mut().enumerate() {
+            let subdst = &src[i * DATA_LEN..(i + 1) * DATA_LEN];
+            *item = Escrow::unpack_from_slice(subdst)?;
+        }
+        Ok(obj)
+    }
+}
+
+/// Storage structure created for every escrow swap
 impl Escrow {
     pub fn reset(&mut self) {
         self.active = false;

@@ -25,6 +25,9 @@ pub enum EscrowError {
 
     #[error("Depositor expected another token mint passed by the executor")]
     ExecutorTokenMintMismatch,
+
+    #[error("No available escrow accounts")]
+    NoAvailableEscrowAccounts,
 }
 
 pub fn throw_and_log(error: EscrowError) -> ProgramError {
